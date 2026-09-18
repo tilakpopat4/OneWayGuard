@@ -1,0 +1,15 @@
+# Runtime logs
+*.log
+onewayguard_desktop.log
+
+# Generated user forensic reports (preserve folder structure with .gitkeep)
+reports/*.docx
+reports/*.pdf
+!reports/.gitkeep
+
+# Temporary and cache files
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store
+Thumbs.db
