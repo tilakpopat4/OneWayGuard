@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="OneWayGuard Logo" width="340" />
+  <img src="https://drive.google.com/file/d/1SXj4gPRdOuU9Tile_2Uf2Fgl7HXzJ_db/view?usp=drive_link" alt="OneWayGuard Logo" width="340" />
 </p>
 
 # OneWayGuard — Standalone Windows Desktop Edition
