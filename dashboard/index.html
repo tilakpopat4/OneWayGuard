@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>OneWayGuard</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/styles.css?v=2">
+</head>
+
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="brand-heading">
+          <img src="/static/favicon.png" alt="OneWayGuard" class="brand-logo-img" />
+          <span class="brand-title">OneWayGuard</span>
+          <span class="brand-byline">By Team W3.Got.IT</span>
+        </div>
+        <p class="muted">Upload a capture and inspect the exact flow decisions made by the pipeline.</p>
+      </div>
+      <span class="badge">NO BLOCKING ACTIONS</span>
+    </header>
+
+    <section class="card controls">
+      <label>PCAP file<input id="pcap" type="file" accept=".pcap,.pcapng"></label>
+      <label>Model<select id="model">
+          <option value="generic">Generic flow model (XGBoost)</option>
+          <option value="random_forest">Random Forest ensemble model</option>
+          <option value="mythic_c2">Mythic HTTP C2 model (XGBoost)</option>
+        </select></label>
+      <label>Flag threshold<input id="threshold" type="number" min="0" max="1" step="0.01" value="0.70"></label>
+      <label>Packet limit<input id="limit" type="number" min="1" max="100000" step="100" value="10000"></label>
+      <button id="run">Analyze capture</button>
+      <button id="run-demo" class="demo-btn">Replay Demo Session</button>
+    </section>
+
+    <section class="card controls live-controls">
+      <label>Live interface
+        <input id="interface" list="interfaces" type="text" placeholder="\Device\NPF_{...}">
+        <datalist id="interfaces"></datalist>
+      </label>
+      <label>Website IP filter (optional)
+        <input id="target-ips" type="text" placeholder="IPv4 addresses, comma-separated">
+      </label>
+      <button id="start-live">Start live analysis</button>
+      <button id="stop-live" class="stop" disabled>Stop live analysis</button>
+      <p class="muted live-help">Choose an <b>active</b> Wi-Fi/Ethernet adapter. Live mode reads packets only; Npcap and
+        capture permission are required.</p>
+    </section>
+
+    <p id="status" class="status">Choose a PCAP to begin.</p>
+
+  <!-- Analysis Results Summary Button - Initially Hidden -->
+    <section id="results-summary" class="card hidden">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h3 style="margin: 0; color: #12204a; font-size: 18px;">Analysis Complete</h3>
+          <p class="muted" id="results-text">Click "View Report" to see detailed results</p>
+        </div>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+          <button id="view-report-btn" class="primary" style="padding: 10px 20px; background: #12204a; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">View Report</button>
+          <button id="download-report-btn" class="secondary" style="padding: 10px 20px; background: #e2e8f0; color: #12204a; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Download</button>
+          <button id="clear-results-btn" class="secondary" style="padding: 10px 20px; background: #c53030; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Clear</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="summary" class="grid hidden">
+      <div class="metric"><span>Packets observed</span><strong id="packets">-</strong></div>
+      <div class="metric"><span>Flows processed</span><strong id="processed">-</strong></div>
+      <div class="metric"><span>Flows flagged</span><strong id="flagged">-</strong></div>
+      <div class="metric"><span>Flag rate</span><strong id="rate">-</strong></div>
+      <div class="metric"><span>Throughput</span><strong id="throughput">-</strong><small
+          id="throughput-unit">flows/sec</small></div>
+      <div class="metric"><span>Active flows</span><strong id="active-flows">-</strong></div>
+    </section>
+
+    <!-- Phase 5: Threat Category Breakdown Cards -->
+    <section id="threat-categories" class="card hidden">
+      <div class="threat-cards-header">
+        <h3 style="margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-navy);">SIH Standard Threat Taxonomy Overview</h3>
+        <span class="muted" style="font-size: 12px;">Automated multi-vector classification</span>
+      </div>
+      <div class="threat-grid">
+        <div class="threat-card" data-category="volumetric_ddos">
+          <span class="threat-title">Volumetric DDoS</span>
+          <strong id="count-ddos" class="threat-val">0</strong>
+          <small class="threat-desc">Rate / SYN flood</small>
+        </div>
+        <div class="threat-card" data-category="c2_beaconing">
+          <span class="threat-title">C2 Beaconing</span>
+          <strong id="count-c2" class="threat-val">0</strong>
+          <small class="threat-desc">Periodic interval jitter</small>
+        </div>
+        <div class="threat-card" data-category="dga_dns_tunneling">
+          <span class="threat-title">DNS Tunnel / DGA</span>
+          <strong id="count-dns" class="threat-val">0</strong>
+          <small class="threat-desc">Query length &amp; entropy</small>
+        </div>
+        <div class="threat-card" data-category="reconnaissance_port_scan">
+          <span class="threat-title">Port Scan / Recon</span>
+          <strong id="count-recon" class="threat-val">0</strong>
+          <small class="threat-desc">Fan-out port probes</small>
+        </div>
+        <div class="threat-card" data-category="encrypted_session_anomaly">
+          <span class="threat-title">Encrypted Anomaly</span>
+          <strong id="count-enc" class="threat-val">0</strong>
+          <small class="threat-desc">Payload metadata &amp; ratio</small>
+        </div>
+        <div class="threat-card" data-category="data_exfiltration">
+          <span class="threat-title">Data Exfiltration</span>
+          <strong id="count-exfil" class="threat-val">0</strong>
+          <small class="threat-desc">High outbound volume</small>
+        </div>
+      </div>
+    </section>
+
+    <section id="alert-feed" class="card hidden">
+      <div class="section-heading">
+        <div>
+          <h2>Live alert feed</h2>
+          <p class="muted">Newest standardized alerts received over WebSocket.</p>
+        </div>
+        <button id="clear-alerts" class="secondary">Clear alert feed</button>
+      </div>
+      <p id="alert-count" class="muted">No live alerts received.</p>
+      <div id="alerts" class="alert-list"></div>
+    </section>
+
+    <section id="details" class="card hidden">
+      <div class="section-heading">
+        <div>
+          <h2>Analysis report</h2>
+          <p id="model-label" class="muted"></p>
+          <p id="algorithm-label" class="muted"></p>
+        </div>
+        <span id="safety" class="safe">Metadata only</span>
+      </div>
+
+      <!-- Quick View Mode Switcher -->
+      <div class="analysis-view-switcher">
+        <button id="view-tab-all" class="view-tab-btn active">
+          <svg class="tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+          All Flows <span id="count-all" class="view-tab-count">0</span>
+        </button>
+        <button id="view-tab-flagged" class="view-tab-btn">
+          <svg class="tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          Flagged Alerts <span id="count-flagged" class="view-tab-count">0</span>
+        </button>
+        <button id="view-tab-expand-all" class="view-tab-btn">
+          <svg class="tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          Deep Alert Details
+        </button>
+        <button id="view-tab-report" class="view-tab-btn">
+          <svg class="tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+          Incident Report &amp; Visualizations
+        </button>
+      </div>
+
+      <div id="attack-summary" class="attack-summary"></div>
+
+      <div class="filter-panel">
+        <label>Search all fields<input id="filter-text" type="search"
+            placeholder="IP, port, protocol, reason, feature, time..."></label>
+        <label>Minimum packets<input id="filter-min-packets" type="number" min="0" placeholder="0"></label>
+        <label>Minimum bytes<input id="filter-min-bytes" type="number" min="0" placeholder="0"></label>
+        <label>Minimum probability<input id="filter-min-probability" type="number" min="0" max="1" step="0.01"
+            placeholder="0"></label>
+        <label>Status<select id="filter-status">
+            <option value="all">All statuses</option>
+            <option value="flagged">Flagged only</option>
+            <option value="clear">Clear only</option>
+          </select></label>
+        <label>Severity<select id="filter-severity">
+            <option value="all">All severities</option>
+            <option>high</option>
+            <option>medium</option>
+            <option>low</option>
+          </select></label>
+        <label>Anomaly<select id="filter-anomaly">
+            <option value="all">All anomaly levels</option>
+            <option>ok</option>
+            <option>watch</option>
+            <option>alert</option>
+          </select></label>
+        <button id="clear-filters" class="secondary">Clear filters</button>
+      </div>
+
+      <div class="table-info-bar">
+        <p id="filter-count" class="muted"></p>
+        <span class="table-hint">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          Select any flow row or [Details] to inspect deep telemetry and evidence.
+        </span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time (UTC)</th>
+              <th>Flag</th>
+              <th>Threat</th>
+              <th>Severity</th>
+              <th>Why</th>
+              <th>Probability</th>
+              <th>Observed source</th>
+              <th>Observed destination</th>
+              <th>Packets</th>
+              <th>Bytes</th>
+              <th>Rate</th>
+              <th>Kalman</th>
+              <th>Top evidence</th>
+              <th>Alert Details</th>
+            </tr>
+          </thead>
+          <tbody id="flows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         GENERATE REPORT SECTION
+         Visible after any analysis session (PCAP, live capture, or replay demo).
+         Maps to files/INTEGRATION_NOTES.md "Generate Report" flow.
+         ============================================================ -->
+    <section id="report" class="card report-card">
+      <div class="section-heading">
+        <div>
+          <h2>Network Threat Analysis Report</h2>
+          <p class="muted">Generate and inspect full incident records, empirical telemetry visualizations, and
+            multi-format exports.</p>
+          <p id="report-analysis-id" class="muted report-id-label">Active Analysis: OWG-2026-0915-001 (Template Baseline)</p>
+        </div>
+        <button id="btn-generate-report" class="btn-generate-report">Refresh Report</button>
+      </div>
+
+      <div class="report-summary-bar" id="report-summary-bar">
+        <span>Flows processed: <strong>61</strong></span>
+        <span>Flows flagged: <strong>28</strong></span>
+        <span>Flag rate: <strong>45.90%</strong></span>
+        <span>Highest severity: <strong class="sev-medium">Medium</strong></span>
+      </div>
+
+      <!-- INTERACTIVE REPORT VIEWER & EXACT LEGAL REPORT TEMPLATE -->
+      <div id="report-document" class="report-document">
+        <!-- Top Action Toolbar -->
+        <div class="report-export-toolbar"
+          style="margin-top: 0; margin-bottom: 20px; padding-top: 0; border-top: none;">
+          <button id="btn-download-pdf" class="report-btn report-btn--pdf" type="button">
+            <span class="report-btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+            </span>
+            <span>
+              <strong>Download Legal PDF</strong>
+              <small>Publication-grade · exact 5-page Word template</small>
+            </span>
+          </button>
+          <a id="btn-download-docx" class="report-btn report-btn--docx" href="/static/OneWayGuard_Threat_Analysis_Report_Template.docx"
+            download="OneWayGuard_Threat_Analysis_Report_Template.docx">
+            <span class="report-btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="12" y1="18" x2="12" y2="12"></line>
+                <line x1="9" y1="15" x2="15" y2="15"></line>
+              </svg>
+            </span>
+            <span>
+              <strong>Download Legal DOCX</strong>
+              <small>Original reference Word template file</small>
+            </span>
+          </a>
+          <button id="btn-print-report" class="report-btn report-btn--print" type="button">
+            <span class="report-btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+            </span>
+            <span>
+              <strong>Print Legal Report</strong>
+              <small>Browser print dialog · clean layout</small>
+            </span>
+          </button>
+          <a id="btn-download-json" class="report-btn report-btn--json" href="/api/report/OWG-2026-0915-001/json"
+            download="OWG-2026-0915-001_report.json">
+            <span class="report-btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+              </svg>
+            </span>
+            <span>
+              <strong>JSON Report</strong>
+              <small>Machine-readable schema</small>
+            </span>
+          </a>
+          <a id="btn-download-csv" class="report-btn report-btn--csv" href="/api/report/OWG-2026-0915-001/csv"
+            download="OWG-2026-0915-001_flows.csv">
+            <span class="report-btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="3" y1="9" x2="21" y2="9"></line>
+                <line x1="3" y1="15" x2="21" y2="15"></line>
+                <line x1="9" y1="3" x2="9" y2="21"></line>
+                <line x1="15" y1="3" x2="15" y2="21"></line>
+              </svg>
+            </span>
+            <span>
+              <strong>CSV Export</strong>
+              <small>Flow-level SIEM rows</small>
+            </span>
+          </a>
+        </div>
+
+        <!-- Report Preview Status Notification -->
+        <div id="report-preview-status" class="report-preview-status">
+          <div class="preview-status-indicator">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <span class="preview-status-badge active">TEMPLATE ACTIVE</span>
+          </div>
+          <div class="preview-status-text">
+            Exact 5-page forensic legal report template loaded. Click <strong>Print Legal Report</strong> or <strong>Download Legal PDF</strong> to save as PDF.
+          </div>
+          <button type="button" id="btn-toggle-preview" class="btn-toggle-preview" onclick="toggleDocumentPreview()">Toggle View</button>
+        </div>
+
+        <!-- EXACT LEGAL REPORT BODY (Populated matching OneWayGuard_Threat_Analysis_Report_Template.docx) -->
+        <div id="report-preview-wrapper" class="report-preview-wrapper">
+          <!-- Print Running Header (appears at top of every printed page) -->
+          <div class="print-running-header">
+            CONFIDENTIAL &nbsp;—&nbsp; OneWayGuard Network Threat Analysis Report &nbsp;—&nbsp; Report No. <span id="legal-running-id">OWG-2026-0915-001</span>
+          </div>
+          <!-- Print Running Footer (appears at bottom of every printed page) -->
+          <div class="print-running-footer">
+            Generated by the OneWayGuard Report Engine from passively captured, metadata-only network telemetry.
+          </div>
+
+          <table class="report-print-layout-table">
+            <thead>
+              <tr>
+                <td><div class="print-header-spacer"></div></td>
+              </tr>
+            </thead>
+            <tfoot>
+              <tr>
+                <td><div class="print-footer-spacer"></div></td>
+              </tr>
+            </tfoot>
+            <tbody>
+              <tr>
+                <td>
+                  <div id="legal-report-container" class="legal-report-container">
+            <!-- 1. Header Banner -->
+            <div class="legal-header-banner">
+              <div class="legal-banner-conf">CONFIDENTIAL</div>
+              <h1 class="legal-banner-title">ONEWAYGUARD</h1>
+              <h2 class="legal-banner-sub">NETWORK THREAT ANALYSIS REPORT</h2>
+              <p class="legal-banner-meta">(Passive, Metadata-Only Detection — Critical Infrastructure Monitoring Enclave)</p>
+            </div>
+
+            <!-- Table 0: Report Control Table -->
+            <div class="legal-table-wrap">
+              <table class="legal-table control-table">
+                <tbody>
+                  <tr>
+                    <td class="col-label">Report No.</td>
+                    <td id="legal-t0-id" class="col-val mono-text">OWG-2026-0915-001</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Report Type</td>
+                    <td class="col-val">Network Threat Analysis Report — Passive Detection</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Prepared By</td>
+                    <td class="col-val">OneWayGuard Automated Threat Detection Pipeline</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Analysis Mode</td>
+                    <td id="legal-t0-mode" class="col-val">Live Capture</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Monitored Interface</td>
+                    <td id="legal-t0-interface" class="col-val">Wi-Fi (mirrored via optical tap / hardware data diode)</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Analysis Period / Duration</td>
+                    <td id="legal-t0-duration" class="col-val">66 seconds (see Section II for session timestamps)</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Capture Classification</td>
+                    <td class="col-val">Metadata-Only — No Payload Inspected, Decrypted, or Retained</td>
+                  </tr>
+                  <tr>
+                    <td class="col-label">Report Classification</td>
+                    <td class="col-val"><strong>CONFIDENTIAL — For Internal / Authorized Use Only</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Section I. PRELIMINARY STATEMENT -->
+            <div class="legal-section">
+              <h3 class="legal-sec-title">I.  PRELIMINARY STATEMENT</h3>
+              <p class="legal-p">1.&nbsp;&nbsp;This report is issued by the OneWayGuard passive cyber-threat detection pipeline in connection with the continuous security monitoring of the above-referenced critical-infrastructure monitoring enclave. It sets forth the findings of an automated analysis session conducted on the date and interface identified in the Report Control Table above.</p>
+              <p class="legal-p">2.&nbsp;&nbsp;This report is based exclusively on metadata-only features extracted from unidirectional network traffic. At no point during the underlying analysis was any packet payload accessed, decrypted, copied, or retained, and at no point did the reporting system transmit any traffic, complete any handshake, or otherwise interact with the monitored network.</p>
+              <p class="legal-p">3.&nbsp;&nbsp;The findings set forth herein are statistical and behavioral in nature. They identify traffic patterns consistent with the threat categories described below and are intended to support, and not to substitute for, review and verification by a qualified security analyst prior to any escalation, remediation, or disclosure action.</p>
+            </div>
+
+            <!-- Section II. SCOPE, METHODOLOGY, AND LIMITATIONS -->
+            <div class="legal-section">
+              <h3 class="legal-sec-title">II.  SCOPE, METHODOLOGY, AND LIMITATIONS</h3>
+              <p class="legal-p">4.&nbsp;&nbsp;<strong>Architecture.</strong> OneWayGuard operates under strict physical and architectural constraints. It ingests unidirectional IP traffic across a hardware data diode or optical tap and has no return path into the production network. It cannot send probes, complete TCP handshakes, decrypt TLS/QUIC payloads, or perform inline blocking of any kind.</p>
+              <p class="legal-p">5.&nbsp;&nbsp;<strong>Detection Method.</strong> The system extracts streaming, metadata-only features — including packet timing jitter, volume asymmetry, TCP flag dynamics, and DNS entropy — and evaluates them in near real time through a hybrid detection engine combining an adaptive Kalman filter operating on innovation residuals, a regularized XGBoost classification model, and specialist threat heuristics.</p>
+              <p class="legal-p">6.&nbsp;&nbsp;<strong>Scope of Detection.</strong> The detection engine is designed to identify six threat vectors: (a) volumetric distributed denial-of-service (DDoS) activity; (b) botnet command-and-control (C2) beaconing; (c) domain generation algorithm (DGA) activity and DNS tunneling; (d) encrypted session anomalies; (e) reconnaissance and port scanning; and (f) data exfiltration.</p>
+              <p class="legal-p">7.&nbsp;&nbsp;<strong>Limitations.</strong> Because the system does not inspect payload content and cannot verify traffic through active means, all findings reflect probabilistic detection based on observed metadata patterns. No finding in this report should be construed as a confirmed determination that a compromise, intrusion, or policy violation has occurred absent independent analyst verification.</p>
+            </div>
+
+            <!-- Section III. SUMMARY OF FINDINGS -->
+            <div class="legal-section legal-page-break">
+              <h3 class="legal-sec-title">III.  SUMMARY OF FINDINGS</h3>
+              <p class="legal-p">8.&nbsp;&nbsp;The following table summarizes the quantitative results of the analysis session identified in the Report Control Table.</p>
+              <div class="legal-table-wrap">
+                <table class="legal-table grid-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 50%;">Metric</th>
+                      <th style="width: 50%;">Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="row-shaded">
+                      <td>Packets Observed</td>
+                      <td id="legal-t1-packets" class="bold-val">554</td>
+                    </tr>
+                    <tr>
+                      <td>Flows Processed</td>
+                      <td id="legal-t1-processed" class="bold-val">61</td>
+                    </tr>
+                    <tr class="row-shaded">
+                      <td>Flows Flagged</td>
+                      <td id="legal-t1-flagged" class="bold-val">28</td>
+                    </tr>
+                    <tr>
+                      <td>Flag Rate</td>
+                      <td id="legal-t1-rate" class="bold-val">45.90%</td>
+                    </tr>
+                    <tr class="row-shaded">
+                      <td>Highest Severity Observed</td>
+                      <td id="legal-t1-severity" class="bold-val">Medium</td>
+                    </tr>
+                    <tr>
+                      <td>Classification Model</td>
+                      <td id="legal-t1-model">XGBoost (Regularized)</td>
+                    </tr>
+                    <tr class="row-shaded">
+                      <td>Anomaly Model</td>
+                      <td id="legal-t1-anomaly">Adaptive Kalman Filter (Innovation Residuals)</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- PAGE 2: Section IV & Section V -->
+            <!-- Section IV. DETAILED THREAT FINDINGS -->
+            <div class="legal-section">
+              <h3 class="legal-sec-title">IV.  DETAILED THREAT FINDINGS</h3>
+              <p class="legal-p">9.&nbsp;&nbsp;The analysis session identified the threat categories set forth in the table below, each supported by the evidence summarized therein and detailed further in Section V.</p>
+              <div class="legal-table-wrap">
+                <table class="legal-table grid-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 7%;">No.</th>
+                      <th style="width: 25%;">Threat Category</th>
+                      <th style="width: 15%;">Severity</th>
+                      <th style="width: 15%;">Confidence</th>
+                      <th style="width: 38%;">Supporting Evidence</th>
+                    </tr>
+                  </thead>
+                  <tbody id="legal-t2-tbody">
+                    <tr class="row-shaded">
+                      <td>1</td>
+                      <td><strong>C2 Beaconing</strong></td>
+                      <td>HIGH</td>
+                      <td><strong>93.4%</strong></td>
+                      <td>Low-jitter periodic traffic</td>
+                    </tr>
+                    <tr>
+                      <td>2</td>
+                      <td><strong>Reconnaissance</strong></td>
+                      <td>MEDIUM</td>
+                      <td><strong>87.2%</strong></td>
+                      <td>Repeated connection attempts</td>
+                    </tr>
+                    <tr class="row-shaded">
+                      <td>3</td>
+                      <td><strong>DNS Anomaly</strong></td>
+                      <td>MEDIUM</td>
+                      <td><strong>81.5%</strong></td>
+                      <td>Abnormal DNS entropy / query characteristics</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="legal-p" style="margin-top: 8px;">10.&nbsp;&nbsp;Severity and confidence values are produced by the fused Kalman-residual / XGBoost detection engine described in Section II and reflect statistical likelihood rather than confirmed compromise. Each finding requires independent analyst verification prior to escalation.</p>
+            </div>
+
+            <!-- Section V. DETECTION EVIDENCE -->
+            <div class="legal-section">
+              <h3 class="legal-sec-title">V.  DETECTION EVIDENCE</h3>
+              <p id="legal-t3-flow-record" class="legal-flow-record">Flow of Record: 192.168.1.7 → 203.0.113.44:443</p>
+              <div class="legal-table-wrap">
+                <table class="legal-table control-table">
+                  <tbody>
+                    <tr>
+                      <td class="col-label">Source Address</td>
+                      <td id="legal-t3-src" class="col-val">192.168.1.7</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Destination Address</td>
+                      <td id="legal-t3-dst" class="col-val">203.0.113.44</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">ML Classifier Probability</td>
+                      <td id="legal-t3-ml" class="col-val">0.91</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Kalman Anomaly Score</td>
+                      <td id="legal-t3-kalman" class="col-val">4.72</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Fused Confidence Score</td>
+                      <td id="legal-t3-fused" class="col-val bold-val">0.934</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Packet Count</td>
+                      <td id="legal-t3-packets" class="col-val">11</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Byte Count</td>
+                      <td id="legal-t3-bytes" class="col-val">814</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Protocol</td>
+                      <td id="legal-t3-proto" class="col-val">TCP</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Destination Port</td>
+                      <td id="legal-t3-port" class="col-val">443</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p id="legal-t3-basis" class="legal-p">11.&nbsp;&nbsp;<strong>Basis for Flagging.</strong> The above flow was flagged on the basis of a high classifier probability combined with anomalous temporal and flow-volume behavior consistent with periodic command-and-control beaconing, specifically low inter-packet jitter and stable byte volume across repeated connections to the same destination.</p>
+              <p id="legal-t3-action" class="legal-p">12.&nbsp;&nbsp;<strong>Recommended Analyst Action.</strong> It is recommended that the source host identified above be investigated and correlated against endpoint detection and response (EDR) and firewall/proxy logs for the corresponding time window. Destination reputation for the address and port identified above should be independently confirmed before any containment action is taken, as this system cannot itself block traffic or confirm payload content.</p>
+            </div>
+
+            <!-- Section VI. EXHIBITS -->
+            <div class="legal-section legal-page-break">
+              <h3 class="legal-sec-title">VI.  EXHIBITS</h3>
+              <p class="legal-p">13.&nbsp;&nbsp;The following exhibits are incorporated into and form part of this report.</p>
+
+              <div class="legal-exhibits-stack">
+                <div class="legal-exhibit">
+                  <p class="legal-exhibit-title">EXHIBIT A — Threat Distribution by Category</p>
+                  <div class="legal-exhibit-img-wrap">
+                    <img src="/static/exhibit_a.png" alt="EXHIBIT A — Threat Distribution by Category" class="legal-exhibit-img" />
+                  </div>
+                </div>
+
+                <div class="legal-exhibit">
+                  <p class="legal-exhibit-title">EXHIBIT B — Confidence Score Distribution</p>
+                  <div class="legal-exhibit-img-wrap">
+                    <img src="/static/exhibit_b.png" alt="EXHIBIT B — Confidence Score Distribution" class="legal-exhibit-img" />
+                  </div>
+                </div>
+
+                <div class="legal-exhibit">
+                  <p class="legal-exhibit-title">EXHIBIT C — Chronological Alert Timeline</p>
+                  <div class="legal-exhibit-img-wrap">
+                    <img src="/static/exhibit_c.png" alt="EXHIBIT C — Chronological Alert Timeline" class="legal-exhibit-img" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section VII. CORRELATED INCIDENT RECORD -->
+            <div class="legal-section legal-page-break">
+              <h3 class="legal-sec-title">VII.  CORRELATED INCIDENT RECORD</h3>
+              <p class="legal-p">14.&nbsp;&nbsp;Where multiple flagged flows share a common source, destination, or behavioral signature, such flows are consolidated into a single correlated incident record, as set forth below, rather than reported individually.</p>
+
+              <div class="legal-table-wrap">
+                <table class="legal-table control-table">
+                  <tbody>
+                    <tr>
+                      <td class="col-label">Incident No.</td>
+                      <td id="legal-t4-id" class="col-val bold-val">OWG-INC-001</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Threat Classification</td>
+                      <td id="legal-t4-threat" class="col-val bold-val">Possible Command-and-Control (C2) Beaconing</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Severity</td>
+                      <td id="legal-t4-sev" class="col-val bold-val">HIGH</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Confidence</td>
+                      <td id="legal-t4-conf" class="col-val">94.1%</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Affected Source</td>
+                      <td id="legal-t4-src" class="col-val">192.168.1.7</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Destination</td>
+                      <td id="legal-t4-dst" class="col-val">203.0.113.44 : 443</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Related Flows</td>
+                      <td id="legal-t4-flows" class="col-val">5</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">First Observed (UTC)</td>
+                      <td id="legal-t4-first" class="col-val">2026-09-15 17:16:11</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Last Observed (UTC)</td>
+                      <td id="legal-t4-last" class="col-val">2026-09-15 17:17:02</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <p id="legal-t4-evidence-header" class="legal-sub-heading">Supporting Evidence (5 Related Flows)</p>
+              <div id="legal-t4-evidence-list" class="legal-evidence-list">
+                <p class="legal-evidence-line">17:16:11 UTC — 192.168.1.7:51422 → 203.0.113.44:443 — Fused Confidence 0.934</p>
+                <p class="legal-evidence-line">17:16:24 UTC — 192.168.1.7:51430 → 203.0.113.44:443 — Fused Confidence 0.921</p>
+                <p class="legal-evidence-line">17:16:37 UTC — 192.168.1.7:51441 → 203.0.113.44:443 — Fused Confidence 0.918</p>
+                <p class="legal-evidence-line">17:16:49 UTC — 192.168.1.7:51455 → 203.0.113.44:443 — Fused Confidence 0.927</p>
+                <p class="legal-evidence-line">17:17:02 UTC — 192.168.1.7:51468 → 203.0.113.44:443 — Fused Confidence 0.941</p>
+              </div>
+            </div>
+
+            <!-- Section VIII. CERTIFICATION -->
+            <div class="legal-section legal-page-break">
+              <h3 class="legal-sec-title">VIII.  CERTIFICATION</h3>
+              <p class="legal-p">15.&nbsp;&nbsp;I certify, to the best of my knowledge and based upon the automated detection processes described in Section II, that the foregoing report accurately and completely reflects the metadata-only findings generated by the OneWayGuard system during the analysis session identified in the Report Control Table, and that no payload data was accessed, decrypted, or relied upon in the preparation of this report.</p>
+              <p class="legal-p">16.&nbsp;&nbsp;This report is provided for internal security operations, investigative, and/or compliance purposes. It does not constitute a legal conclusion regarding the occurrence of any unauthorized access, breach, or violation of law, and is submitted subject to independent review and verification by qualified personnel.</p>
+            </div>
+
+            <!-- Section IX. CHAIN OF CUSTODY AND REPORT AUTHENTICATION -->
+            <div class="legal-section">
+              <h3 class="legal-sec-title">IX.  CHAIN OF CUSTODY AND REPORT AUTHENTICATION</h3>
+              <p class="legal-p">17.&nbsp;&nbsp;The following information establishes the provenance of this report and supports its use as supporting documentation in internal investigations, compliance filings, or other proceedings requiring a documented chain of custody.</p>
+              <div class="legal-table-wrap">
+                <table class="legal-table control-table">
+                  <tbody>
+                    <tr>
+                      <td class="col-label">Report Generated (UTC)</td>
+                      <td id="legal-t5-generated" class="col-val">2026-09-15 17:17:14</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Generated By</td>
+                      <td id="legal-t5-engine" class="col-val">OneWayGuard Report Engine v1.0.0</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Sensor / Tap Identifier</td>
+                      <td id="legal-t5-sensor" class="col-val">SOC-SENSOR-ALPHA-01</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Analyst of Record</td>
+                      <td id="legal-t5-analyst" class="col-val">SOC Duty Analyst</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Report Integrity Hash (SHA-256)</td>
+                      <td id="legal-t5-hash" class="col-val mono-text">e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</td>
+                    </tr>
+                    <tr>
+                      <td class="col-label">Source Data Retention Period</td>
+                      <td id="legal-t5-retention" class="col-val">90 days — internal SOC use</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Section X. SIGNATURES -->
+            <div class="legal-section legal-signatures-section">
+              <h3 class="legal-sec-title">X.  SIGNATURES</h3>
+              <p class="legal-p">18.&nbsp;&nbsp;IN WITNESS WHEREOF, the undersigned have reviewed and, where applicable, approved this report for the purposes stated herein.</p>
+              
+              <div class="legal-signatures-flow">
+                <div class="legal-sig-block">
+                  <div class="legal-sig-line">_______________________________________</div>
+                  <div class="legal-sig-role">Analyst of Record</div>
+                  <div class="legal-sig-field">Printed Name: ______________________________</div>
+                  <div class="legal-sig-field">Title: ______________________________________</div>
+                  <div class="legal-sig-field">Date: _______________________ &nbsp; Location: ______________________</div>
+                </div>
+                
+                <div class="legal-sig-block">
+                  <div class="legal-sig-line">_______________________________________</div>
+                  <div class="legal-sig-role">Reviewing Officer / SOC Lead</div>
+                  <div class="legal-sig-field">Printed Name: ______________________________</div>
+                  <div class="legal-sig-field">Title: ______________________________________</div>
+                  <div class="legal-sig-field">Date: _______________________ &nbsp; Location: ______________________</div>
+                </div>
+              </div>
+            </div>
+                  </div> <!-- /#legal-report-container -->
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div> <!-- /#report-preview-wrapper -->
+      </div> <!-- /report-document -->
+    </section>
+
+    <section class="card help">
+      <h2>How to use the detector</h2>
+      <div class="help-grid">
+        <div>
+          <h3>Generic flow model</h3>
+          <p>Broad benign-versus-malicious flow model for general traffic. It is not a dedicated DDoS labeler.</p>
+        </div>
+        <div>
+          <h3>Mythic HTTP C2 model</h3>
+          <p>Specialized for TQH Mythic Poseidon HTTP command-and-control patterns. Do not use it as a general website
+            verdict.</p>
+        </div>
+        <div>
+          <h3>Live interface</h3>
+          <p>Scapy reads packets from the selected Npcap interface, updates flows in memory, and refreshes this report
+            every second. It never sends or blocks packets.</p>
+        </div>
+      </div>
+    </section>
+    <section class="card scoring-guide">
+      <h2>How a flow becomes flagged</h2>
+      <p class="muted">A flag is a review signal, not proof that an attack occurred.</p>
+      <ol>
+        <li><b>Feature extraction:</b> packet metadata is converted to flow features such as packet count, bytes, rate,
+          timing, TCP flags, and packet-size statistics.</li>
+        <li><b>Classifier score:</b> XGBoost returns a malicious probability from 0 to 1.</li>
+        <li><b>Kalman score:</b> the filter compares rate, inter-arrival time, and SYN count with expected behavior and
+          reports an anomaly score (z-score, sigma σ).</li>
+        <li><b>Fused confidence:</b> <code>0.7 × classifier probability + 0.3 × bounded Kalman anomaly</code>. 
+          The flow is flagged ONLY when <code>fused_confidence >= threshold</code>.</li>
+        <li><b>Severity:</b> a possible volumetric event can raise severity; otherwise a flagged flow is normally medium
+          severity.</li>
+        <li><b>DoS/DDoS:</b> this requires destination aggregation. Current conservative rule: at least 1,000 packets
+          and 1,000 packets/sec; DDoS additionally needs at least 3 distinct sources.</li>
+      </ol>
+      <h3>Detection coverage</h3>
+      <div class="coverage-grid">
+        <span class="implemented">Implemented: generic malicious flow</span>
+        <span class="implemented">Implemented: Mythic HTTP C2 model</span>
+        <span class="implemented">Implemented: packet-volume DoS/DDoS evidence</span>
+        <span class="implemented">Implemented: live SYN/UDP flood evidence</span>
+        <span class="implemented">Implemented: live port-scan specialist</span>
+        <span class="implemented">Implemented: live DNS/DGA metadata evidence</span>
+        <span class="implemented">Implemented: live botnet beacon timing</span>
+        <span class="implemented">Implemented: live TLS/QUIC metadata anomaly</span>
+        <span class="implemented">Implemented: live directional exfiltration evidence</span>
+        <span class="implemented">Implemented: live WebSocket alert stream</span>
+      </div>
+    </section>
+  </main>
+  <script src="/static/app.js?v=2"></script>
+</body>
+
+</html>
